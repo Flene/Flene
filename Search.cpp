@@ -25,6 +25,7 @@
 #include <functional>
 #include <string>
 #include <cstdint>
+#include <iostream>
 
 namespace {
 
@@ -287,473 +288,499 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
   auto start_time = clock::now();
   auto end_time   = start_time + std::chrono::milliseconds(timeLimitMs_);
 
+  try {
+    std::unordered_map<uint64_t, TTEntry> tt;
+    tt.reserve(1u << 17);
 
-  std::unordered_map<uint64_t, TTEntry> tt;
-  tt.reserve(1u << 17);
+    // 2-level killer move table: killer_moves[depth][0/1].
+    std::vector<std::array<std::string, 2>> killer_moves(maxDepth_ + 2);
 
-  // 2-level killer move table: killer_moves[depth][0/1].
-  std::vector<std::array<std::string, 2>> killer_moves(maxDepth_ + 2);
+    // History heuristic: maps quiet move string → accumulated bonus.
+    std::unordered_map<std::string, int> history_table;
 
-  // History heuristic: maps quiet move string → accumulated bonus.
-  std::unordered_map<std::string, int> history_table;
-
-  
-  auto killerIdx = [&](int d) -> int {
-    return std::min(d, (int)killer_moves.size() - 1);
-  };
-
-  // Helper: golden-pawn win check
-  auto checkGoldenPawnWin = [&](Player& currentPlayer) -> bool {
-    int back_rank = (currentPlayer.getId() == PlayerId::WHITE) ? 7 : 0;
-    for (int c = 0; c < 8; ++c) {
-      Square* sq = board_.getSquare(c, back_rank);
-      if (sq && sq->getPiece() &&
-          sq->getPiece()->getOwner() == currentPlayer.getId() &&
-          sq->getPiece()->getPieceId() == "PGLD")
-        return true;
-    }
-    return false;
-  };
-
-  // Helper: generate root candidate list (filtering previously failed commands).
-
-  auto generateCandidates = [&](Player& p) {
-    std::vector<std::string> m = game_.generateAllLegalMoves(p, turn_count, frightened_king_cannot_capture, nullptr);
-    std::vector<std::string> s = game_.generateAllLegalSpecials(p, turn_count, frightened_king_cannot_capture, nullptr);
-    std::vector<std::string> cand;
-    cand.reserve(m.size() + s.size());
-    for (auto& it : m) if (!failed_commands.count(it)) cand.push_back(it);
-    for (auto& it : s) if (!failed_commands.count(it)) cand.push_back(it);
-    if (cand.empty()) cand.push_back("pass");
-    return cand;
-  };
-
-
-  // Static evaluation with PST, pawn structure, king safety, endgame bonuses.
-
-  auto evaluateStatic = [&](Player& a, Player& b) -> int {
-    int score = 0;
-
-    // Count total non-king material to detect endgame.
-    int total_material = 0;
-    for (int rf = 0; rf < 8; ++rf) {
-      for (int cf = 0; cf < 8; ++cf) {
-        Square* sq = board_.getSquare(cf, rf);
-        if (!sq) continue;
-        Piece* p = sq->getPiece();
-        if (!p || p->getType() == PieceType::KING) continue;
-        switch (p->getType()) {
-          case PieceType::PAWN:   total_material += 100; break;
-          case PieceType::KNIGHT: total_material += 320; break;
-          case PieceType::BISHOP: total_material += 330; break;
-          case PieceType::ROOK:   total_material += 500; break;
-          case PieceType::QUEEN:  total_material += 900; break;
-          default:                total_material += 100; break;
-        }
-      }
-    }
-    bool endgame = (total_material < 1800);
-
-    // Track pawn file occupancy for structure evaluation.
-    int a_pawns_on_file[8] = {};
-    int b_pawns_on_file[8] = {};
-    for (int rf = 0; rf < 8; ++rf) {
-      for (int cf = 0; cf < 8; ++cf) {
-        Square* sq = board_.getSquare(cf, rf);
-        if (!sq) continue;
-        Piece* p = sq->getPiece();
-        if (!p || p->getType() != PieceType::PAWN) continue;
-        if (p->getOwner() == a.getId()) a_pawns_on_file[cf]++;
-        else                            b_pawns_on_file[cf]++;
-      }
-    }
-
-    // Main material + PST loop.
-    for (int rf = 0; rf < 8; ++rf) {
-      for (int cf = 0; cf < 8; ++cf) {
-        Square* sq = board_.getSquare(cf, rf);
-        if (!sq) continue;
-        Piece* p = sq->getPiece();
-        if (!p) continue;
-
-        int val = 0;
-        switch (p->getType()) {
-          case PieceType::PAWN:   val = 100;   break;
-          case PieceType::KNIGHT: val = 320;   break;
-          case PieceType::BISHOP: val = 330;   break;
-          case PieceType::ROOK:   val = 500;   break;
-          case PieceType::QUEEN:  val = 900;   break;
-          case PieceType::KING:   val = 20000; break;
-          default:                val = 100;   break;
-        }
-        // Special-piece bonuses.
-        const std::string& pid = p->getPieceId();
-        if      (pid == "PGLD") val += 300;
-        else if (pid == "PEXP") val += 150;
-        else if (pid == "RINV") val += 150;
-
-        // PST positional bonus.
-        val += getPSTBonus(p->getType(), p->getOwner(), rf, cf, endgame);
-
-        bool is_a = (p->getOwner() == a.getId());
-        int  sign = is_a ? 1 : -1;
-
-        // Pawn structure evaluation.
-        if (p->getType() == PieceType::PAWN) {
-          int* own_pf = is_a ? a_pawns_on_file : b_pawns_on_file;
-          int* opp_pf = is_a ? b_pawns_on_file : a_pawns_on_file;
-
-          // Doubled pawn penalty.
-          if (own_pf[cf] > 1) val -= 15;
-
-          // Isolated pawn penalty.
-          bool has_neighbour = (cf > 0 && own_pf[cf - 1] > 0) ||
-                               (cf < 7 && own_pf[cf + 1] > 0);
-          if (!has_neighbour) val -= 20;
-
-          // Passed pawn: no opposing pawn on same or adjacent files in front.
-          bool is_passed = (opp_pf[cf] == 0) &&
-                           (cf == 0 || opp_pf[cf - 1] == 0) &&
-                           (cf == 7 || opp_pf[cf + 1] == 0);
-          if (is_passed) {
-            int rank_adv = is_a ? rf : (7 - rf);  // distance advanced from back rank
-            int pp_bonus = endgame ? (20 + rank_adv * 15) : (10 + rank_adv * 8);
-            val += pp_bonus;
-          }
-        }
-
-        score += sign * val;
-      }
-    }
-
-    // King safety: count opponent pieces within a 5×5 area of each king.
-    auto kingSafetyPenalty = [&](Player& defending, Player& attacking) -> int {
-      King* k = board_.getKing(defending.getId());
-      if (!k) return 0;
-      int kf = k->getCoordinates().getFile();
-      int kr = k->getCoordinates().getRank();
-      int threats = 0;
-      for (int dr = -2; dr <= 2; ++dr) {
-        for (int dc = -2; dc <= 2; ++dc) {
-          int nr = kr + dr, nc = kf + dc;
-          if (nr < 0 || nr >= 8 || nc < 0 || nc >= 8) continue;
-          Square* sq = board_.getSquare(nc, nr);
-          if (!sq) continue;
-          Piece* p = sq->getPiece();
-          if (p && p->getOwner() == attacking.getId())
-            threats += simplePieceWeight(p->getType());
-        }
-      }
-      return threats * 3;
+    
+    auto killerIdx = [&](int d) -> int {
+      return std::min(d, (int)killer_moves.size() - 1);
     };
 
-    score -= kingSafetyPenalty(a, b);  // threats to a's king are bad for a
-    score += kingSafetyPenalty(b, a);  // threats to b's king are good for a
-
-    // Mobility: more legal moves is better.
-    auto act_moves = game_.generateAllLegalMoves(a, turn_count, false, nullptr);
-    auto opp_moves = game_.generateAllLegalMoves(b, turn_count, false, nullptr);
-    score += static_cast<int>(act_moves.size()) * 5;
-    score -= static_cast<int>(opp_moves.size()) * 5;
-
-    // Mana advantage.
-    score += a.getMana() * 3;
-    score -= b.getMana() * 3;
-
-    return score;
-  };
-
-  // Forward declaration of negamax for mutual recursion with quiescence.
-  std::function<int(int,int,int,Player&,Player&,bool)> negamax;
-
-  // Quiescence search: extend captures to reduce horizon effect.
-
-  std::function<int(int,int,Player&,Player&)> quiescence;
-  quiescence = [&](int alpha, int beta, Player& side, Player& other) -> int {
-    if (clock::now() > end_time) return 0;
-
-    int stand_pat = evaluateStatic(side, other);
-    if (stand_pat >= beta) return beta;
-    if (stand_pat > alpha) alpha = stand_pat;
-
-    std::vector<std::string> caps;
-    auto moves   = game_.generateAllLegalMoves(side, turn_count, false, nullptr);
-    auto specials = game_.generateAllLegalSpecials(side, turn_count, false, nullptr);
-    for (auto& m : moves)    if (m != "pass" && moveIsCapture(m, board_, side))    caps.push_back(m);
-    for (auto& s : specials) if (s != "pass" && moveIsCapture(s, board_, side))    caps.push_back(s);
-
-    // Order captures by MVV/LVA.
-    std::sort(caps.begin(), caps.end(), [&](const std::string& a, const std::string& b) {
-      return getMvvLvaScore(a, board_, side) > getMvvLvaScore(b, board_, side);
-    });
-
-    for (auto& mv : caps) {
-      if (clock::now() > end_time) break;
-      Board::UndoRecord rec = board_.makeMoveSimulation(mv, side, other, turn_count, frightened_king_cannot_capture);
-      if (!rec.valid) continue;
-
-      King* oppKing = board_.getKing(other.getId());
-      bool pgld_win = (mv.find("PGLD") != std::string::npos) && checkGoldenPawnWin(side);
-      int score = (!oppKing || pgld_win) ? 100000 : -quiescence(-beta, -alpha, other, side);
-      board_.undoMoveSimulation(rec, side, other);
-
-      if (score >= beta) return beta;
-      if (score > alpha) alpha = score;
-    }
-    return alpha;
-  };
-
-  // Negamax with alpha-beta pruning, transposition table, and various enhancements.
-  negamax = [&](int depth, int alpha, int beta,
-                Player& side, Player& other, bool allow_null) -> int
-  {
-    if (clock::now() > end_time) return 0;
-
-    // --- Check extension ---
-    King* my_king = board_.getKing(side.getId());
-    bool in_check = my_king && my_king->inCheck(board_, side, turn_count);
-    int  ext       = (in_check && depth > 0) ? 1 : 0;
-    int  actual_d  = depth + ext;
-
-    if (actual_d == 0)
-      return quiescence(alpha, beta, side, other);
-
-
-    int      original_alpha = alpha;
-    uint64_t hash_key       = computeZobristKey(board_, side, other, turn_count);
-    auto it = tt.find(hash_key);
-    if (it != tt.end() && it->second.hash == hash_key && it->second.depth >= actual_d) {
-      const TTEntry& ent = it->second;
-      if (ent.flag == TTFlag::EXACT)                                return ent.value;
-      if (ent.flag == TTFlag::LOWERBOUND) alpha = std::max(alpha, ent.value);
-      else                                beta  = std::min(beta,  ent.value);
-      if (alpha >= beta) return ent.value;
-    }
-    std::string tt_move = (it != tt.end() && it->second.hash == hash_key) ? it->second.bestMove : "";
-
-    // --- Null move pruning ---
-    if (allow_null && actual_d >= 3 && !in_check) {
-      int R = 2;
-      int null_score = -negamax(actual_d - 1 - R, -beta, -beta + 1, other, side, false);
-      if (null_score >= beta) return beta;
-    }
-
-    // --- Generate moves ---
-    std::vector<std::string> moves   = game_.generateAllLegalMoves(side, turn_count, frightened_king_cannot_capture, nullptr);
-    std::vector<std::string> specials = game_.generateAllLegalSpecials(side, turn_count, frightened_king_cannot_capture, nullptr);
-    std::vector<std::string> cand;
-    cand.reserve(moves.size() + specials.size());
-    cand.insert(cand.end(), moves.begin(), moves.end());
-    cand.insert(cand.end(), specials.begin(), specials.end());
-
-    if (cand.empty()) {
-      // Checkmate or stalemate.
-      return in_check ? (-90000 + (maxDepth_ - actual_d)) : 0;
-    }
-
-    // --- Move ordering: TT move > MVV/LVA captures > killers > history > evaluateMove ---
-    const auto& killers = killer_moves[killerIdx(actual_d)];
-    std::sort(cand.begin(), cand.end(), [&](const std::string& a, const std::string& b) {
-      auto score_of = [&](const std::string& m) -> int {
-        if (m == tt_move) return 2000000;
-        if (moveIsCapture(m, board_, side))
-          return 1000000 + getMvvLvaScore(m, board_, side);
-        if (m == killers[0]) return 900000;
-        if (m == killers[1]) return 800000;
-        auto hi = history_table.find(m);
-        int  h  = (hi != history_table.end()) ? hi->second : 0;
-        return h + game_.evaluateMove(m, side.getId());
-      };
-      return score_of(a) > score_of(b);
-    });
-
-    int         bestValue     = std::numeric_limits<int>::min() / 4;
-    std::string bestMoveLocal;
-    int         moves_searched = 0;
-
-    for (const auto& mv : cand) {
-      if (clock::now() > end_time) break;
-
-      // "pass" move: give the turn away (penalised slightly).
-      if (mv == "pass") {
-        int val = -negamax(actual_d - 1, -beta, -alpha, other, side, false) - 10;
-        if (val > bestValue) { bestValue = val; bestMoveLocal = mv; }
-        alpha = std::max(alpha, bestValue);
-        if (alpha >= beta) break;
-        ++moves_searched;
-        continue;
+    // Helper: golden-pawn win check
+    auto checkGoldenPawnWin = [&](Player& currentPlayer) -> bool {
+      int back_rank = (currentPlayer.getId() == PlayerId::WHITE) ? 7 : 0;
+      for (int c = 0; c < 8; ++c) {
+        Square* sq = board_.getSquare(c, back_rank);
+        if (sq && sq->getPiece() &&
+            sq->getPiece()->getOwner() == currentPlayer.getId() &&
+            sq->getPiece()->getPieceId() == "PGLD")
+          return true;
       }
+      return false;
+    };
 
-      Board::UndoRecord rec = board_.makeMoveSimulation(mv, side, other, turn_count, frightened_king_cannot_capture);
-      if (!rec.valid) continue;
+    // Helper: generate root candidate list (filtering previously failed commands).
 
-      King* oppKing = board_.getKing(other.getId());
-      bool  pgld_win = (mv.find("PGLD") != std::string::npos) && checkGoldenPawnWin(side);
-      bool  is_cap   = moveIsCapture(mv, board_, side);
+    auto generateCandidates = [&](Player& p) {
+      std::vector<std::string> m = game_.generateAllLegalMoves(p, turn_count, frightened_king_cannot_capture, nullptr);
+      std::vector<std::string> s = game_.generateAllLegalSpecials(p, turn_count, frightened_king_cannot_capture, nullptr);
+      std::vector<std::string> cand;
+      cand.reserve(m.size() + s.size());
+      for (auto& it : m) if (!failed_commands.count(it)) cand.push_back(it);
+      for (auto& it : s) if (!failed_commands.count(it)) cand.push_back(it);
+      if (cand.empty()) cand.push_back("pass");
+      return cand;
+    };
 
-      int score;
-      if (!oppKing || pgld_win) {
-        score = 100000;
-      } else {
-        int new_d = actual_d - 1;
 
-        // Late Move Reduction: reduce depth for quiet moves searched late.
-        bool use_lmr = !is_cap && !in_check && moves_searched >= 3 && actual_d >= 3 &&
-                       mv != killers[0] && mv != killers[1] && mv != tt_move;
-        if (use_lmr) {
-          // Reduced-depth search with a null window.
-          score = -negamax(new_d - 1, -alpha - 1, -alpha, other, side, true);
-          // Re-search at full depth if score is interesting.
-          if (score > alpha)
-            score = -negamax(new_d, -beta, -alpha, other, side, true);
-        } else {
-          score = -negamax(new_d, -beta, -alpha, other, side, true);
-        }
-      }
+    // Static evaluation with PST, pawn structure, king safety, endgame bonuses.
 
-      board_.undoMoveSimulation(rec, side, other);
-      ++moves_searched;
+    auto evaluateStatic = [&](Player& a, Player& b) -> int {
+      int score = 0;
 
-      if (score > bestValue) {
-        bestValue     = score;
-        bestMoveLocal = mv;
-        if (bestValue > alpha) {
-          alpha = bestValue;
-          if (!is_cap) {
-            // Update 2-level killer table.
-            int ki = killerIdx(actual_d);
-            if (mv != killer_moves[ki][0]) {
-              killer_moves[ki][1] = killer_moves[ki][0];
-              killer_moves[ki][0] = mv;
-            }
-            // Update history heuristic.
-            history_table[mv] += actual_d * actual_d;
+      // Count total non-king material to detect endgame.
+      int total_material = 0;
+      for (int rf = 0; rf < 8; ++rf) {
+        for (int cf = 0; cf < 8; ++cf) {
+          Square* sq = board_.getSquare(cf, rf);
+          if (!sq) continue;
+          Piece* p = sq->getPiece();
+          if (!p || p->getType() == PieceType::KING) continue;
+          switch (p->getType()) {
+            case PieceType::PAWN:   total_material += 100; break;
+            case PieceType::KNIGHT: total_material += 320; break;
+            case PieceType::BISHOP: total_material += 330; break;
+            case PieceType::ROOK:   total_material += 500; break;
+            case PieceType::QUEEN:  total_material += 900; break;
+            default:                total_material += 100; break;
           }
         }
       }
-      if (alpha >= beta) break;  // beta cutoff
+      bool endgame = (total_material < 1800);
+
+      // Track pawn file occupancy for structure evaluation.
+      int a_pawns_on_file[8] = {};
+      int b_pawns_on_file[8] = {};
+      for (int rf = 0; rf < 8; ++rf) {
+        for (int cf = 0; cf < 8; ++cf) {
+          Square* sq = board_.getSquare(cf, rf);
+          if (!sq) continue;
+          Piece* p = sq->getPiece();
+          if (!p || p->getType() != PieceType::PAWN) continue;
+          if (p->getOwner() == a.getId()) a_pawns_on_file[cf]++;
+          else                            b_pawns_on_file[cf]++;
+        }
+      }
+
+      // Main material + PST loop.
+      for (int rf = 0; rf < 8; ++rf) {
+        for (int cf = 0; cf < 8; ++cf) {
+          Square* sq = board_.getSquare(cf, rf);
+          if (!sq) continue;
+          Piece* p = sq->getPiece();
+          if (!p) continue;
+
+          int val = 0;
+          switch (p->getType()) {
+            case PieceType::PAWN:   val = 100;   break;
+            case PieceType::KNIGHT: val = 320;   break;
+            case PieceType::BISHOP: val = 330;   break;
+            case PieceType::ROOK:   val = 500;   break;
+            case PieceType::QUEEN:  val = 900;   break;
+            case PieceType::KING:   val = 20000; break;
+            default:                val = 100;   break;
+          }
+          // Special-piece bonuses.
+          const std::string& pid = p->getPieceId();
+          if      (pid == "PGLD") val += 300;
+          else if (pid == "PEXP") val += 150;
+          else if (pid == "RINV") val += 150;
+
+          // PST positional bonus.
+          val += getPSTBonus(p->getType(), p->getOwner(), rf, cf, endgame);
+
+          bool is_a = (p->getOwner() == a.getId());
+          int  sign = is_a ? 1 : -1;
+
+          // Pawn structure evaluation.
+          if (p->getType() == PieceType::PAWN) {
+            int* own_pf = is_a ? a_pawns_on_file : b_pawns_on_file;
+            int* opp_pf = is_a ? b_pawns_on_file : a_pawns_on_file;
+
+            // Doubled pawn penalty.
+            if (own_pf[cf] > 1) val -= 15;
+
+            // Isolated pawn penalty.
+            bool has_neighbour = (cf > 0 && own_pf[cf - 1] > 0) ||
+                                 (cf < 7 && own_pf[cf + 1] > 0);
+            if (!has_neighbour) val -= 20;
+
+            // Passed pawn: no opposing pawn on same or adjacent files in front.
+            bool is_passed = (opp_pf[cf] == 0) &&
+                             (cf == 0 || opp_pf[cf - 1] == 0) &&
+                             (cf == 7 || opp_pf[cf + 1] == 0);
+            if (is_passed) {
+              int rank_adv = is_a ? rf : (7 - rf);  // distance advanced from back rank
+              int pp_bonus = endgame ? (20 + rank_adv * 15) : (10 + rank_adv * 8);
+              val += pp_bonus;
+            }
+          }
+
+          score += sign * val;
+        }
+      }
+
+      // King safety: count opponent pieces within a 5×5 area of each king.
+      auto kingSafetyPenalty = [&](Player& defending, Player& attacking) -> int {
+        King* k = board_.getKing(defending.getId());
+        if (!k) return 0;
+        int kf = k->getCoordinates().getFile();
+        int kr = k->getCoordinates().getRank();
+        int threats = 0;
+        for (int dr = -2; dr <= 2; ++dr) {
+          for (int dc = -2; dc <= 2; ++dc) {
+            int nr = kr + dr, nc = kf + dc;
+            if (nr < 0 || nr >= 8 || nc < 0 || nc >= 8) continue;
+            Square* sq = board_.getSquare(nc, nr);
+            if (!sq) continue;
+            Piece* p = sq->getPiece();
+            if (p && p->getOwner() == attacking.getId())
+              threats += simplePieceWeight(p->getType());
+          }
+        }
+        return threats * 3;
+      };
+
+      score -= kingSafetyPenalty(a, b);  // threats to a's king are bad for a
+      score += kingSafetyPenalty(b, a);  // threats to b's king are good for a
+
+      // Mobility: more legal moves is better.
+      auto act_moves = game_.generateAllLegalMoves(a, turn_count, false, nullptr);
+      auto opp_moves = game_.generateAllLegalMoves(b, turn_count, false, nullptr);
+      score += static_cast<int>(act_moves.size()) * 5;
+      score -= static_cast<int>(opp_moves.size()) * 5;
+
+      // Mana advantage.
+      score += a.getMana() * 3;
+      score -= b.getMana() * 3;
+
+      return score;
+    };
+
+    // Forward declaration of negamax for mutual recursion with quiescence.
+    std::function<int(int,int,int,Player&,Player&,bool)> negamax;
+
+    // Quiescence search: extend captures to reduce horizon effect.
+
+    std::function<int(int,int,Player&,Player&)> quiescence;
+    quiescence = [&](int alpha, int beta, Player& side, Player& other) -> int {
+      if (clock::now() > end_time) return 0;
+
+      int stand_pat = evaluateStatic(side, other);
+      if (stand_pat >= beta) return beta;
+      if (stand_pat > alpha) alpha = stand_pat;
+
+      std::vector<std::string> caps;
+      auto moves   = game_.generateAllLegalMoves(side, turn_count, false, nullptr);
+      auto specials = game_.generateAllLegalSpecials(side, turn_count, false, nullptr);
+      for (auto& m : moves)    if (m != "pass" && moveIsCapture(m, board_, side))    caps.push_back(m);
+      for (auto& s : specials) if (s != "pass" && moveIsCapture(s, board_, side))    caps.push_back(s);
+
+      // Order captures by MVV/LVA.
+      std::sort(caps.begin(), caps.end(), [&](const std::string& a, const std::string& b) {
+        return getMvvLvaScore(a, board_, side) > getMvvLvaScore(b, board_, side);
+      });
+
+      for (auto& mv : caps) {
+        if (clock::now() > end_time) break;
+        Board::UndoRecord rec = board_.makeMoveSimulation(mv, side, other, turn_count, frightened_king_cannot_capture);
+        if (!rec.valid) continue;
+
+        King* oppKing = board_.getKing(other.getId());
+        bool pgld_win = (mv.find("PGLD") != std::string::npos) && checkGoldenPawnWin(side);
+        int score = (!oppKing || pgld_win) ? 100000 : -quiescence(-beta, -alpha, other, side);
+        board_.undoMoveSimulation(rec, side, other);
+
+        if (score >= beta) return beta;
+        if (score > alpha) alpha = score;
+      }
+      return alpha;
+    };
+
+
+   
+    negamax = [&](int depth, int alpha, int beta,
+                  Player& side, Player& other, bool allow_null) -> int
+    {
+      if (clock::now() > end_time) return 0;
+
+      // --- Check extension ---
+      King* my_king = board_.getKing(side.getId());
+      bool in_check = my_king && my_king->inCheck(board_, side, turn_count);
+      int  ext       = (in_check && depth > 0) ? 1 : 0;
+      int  actual_d  = depth + ext;
+
+      if (actual_d == 0)
+        return quiescence(alpha, beta, side, other);
+
+
+      int      original_alpha = alpha;
+      uint64_t hash_key       = computeZobristKey(board_, side, other, turn_count);
+      auto it = tt.find(hash_key);
+      if (it != tt.end() && it->second.hash == hash_key && it->second.depth >= actual_d) {
+        const TTEntry& ent = it->second;
+        if (ent.flag == TTFlag::EXACT)                                return ent.value;
+        if (ent.flag == TTFlag::LOWERBOUND) alpha = std::max(alpha, ent.value);
+        else                                beta  = std::min(beta,  ent.value);
+        if (alpha >= beta) return ent.value;
+      }
+      std::string tt_move = (it != tt.end() && it->second.hash == hash_key) ? it->second.bestMove : "";
+
+      // --- Null move pruning ---
+      if (allow_null && actual_d >= 3 && !in_check) {
+        int R = 2;
+        int null_score = -negamax(actual_d - 1 - R, -beta, -beta + 1, other, side, false);
+        if (null_score >= beta) return beta;
+      }
+
+      // --- Generate moves ---
+      std::vector<std::string> moves   = game_.generateAllLegalMoves(side, turn_count, frightened_king_cannot_capture, nullptr);
+      std::vector<std::string> specials = game_.generateAllLegalSpecials(side, turn_count, frightened_king_cannot_capture, nullptr);
+      std::vector<std::string> cand;
+      cand.reserve(moves.size() + specials.size());
+      cand.insert(cand.end(), moves.begin(), moves.end());
+      cand.insert(cand.end(), specials.begin(), specials.end());
+
+      if (cand.empty()) {
+        // Checkmate or stalemate.
+        return in_check ? (-90000 + (maxDepth_ - actual_d)) : 0;
+      }
+
+      // --- Move ordering: TT move > MVV/LVA captures > killers > history > evaluateMove ---
+      const auto& killers = killer_moves[killerIdx(actual_d)];
+      std::sort(cand.begin(), cand.end(), [&](const std::string& a, const std::string& b) {
+        auto score_of = [&](const std::string& m) -> int {
+          if (m == tt_move) return 2000000;
+          if (moveIsCapture(m, board_, side))
+            return 1000000 + getMvvLvaScore(m, board_, side);
+          if (m == killers[0]) return 900000;
+          if (m == killers[1]) return 800000;
+          auto hi = history_table.find(m);
+          int  h  = (hi != history_table.end()) ? hi->second : 0;
+          return h + game_.evaluateMove(m, side.getId());
+        };
+        return score_of(a) > score_of(b);
+      });
+
+      int         bestValue     = std::numeric_limits<int>::min() / 4;
+      std::string bestMoveLocal;
+      int         moves_searched = 0;
+
+      for (const auto& mv : cand) {
+        if (clock::now() > end_time) break;
+
+        // "pass" move: give the turn away (penalised slightly).
+        if (mv == "pass") {
+          int val = -negamax(actual_d - 1, -beta, -alpha, other, side, false) - 10;
+          if (val > bestValue) { bestValue = val; bestMoveLocal = mv; }
+          alpha = std::max(alpha, bestValue);
+          if (alpha >= beta) break;
+          ++moves_searched;
+          continue;
+        }
+
+        Board::UndoRecord rec = board_.makeMoveSimulation(mv, side, other, turn_count, frightened_king_cannot_capture);
+        if (!rec.valid) continue;
+
+        King* oppKing = board_.getKing(other.getId());
+        bool  pgld_win = (mv.find("PGLD") != std::string::npos) && checkGoldenPawnWin(side);
+        bool  is_cap   = moveIsCapture(mv, board_, side);
+
+        int score;
+        if (!oppKing || pgld_win) {
+          score = 100000;
+        } else {
+          int new_d = actual_d - 1;
+
+          // Late Move Reduction: reduce depth for quiet moves searched late.
+          bool use_lmr = !is_cap && !in_check && moves_searched >= 3 && actual_d >= 3 &&
+                         mv != killers[0] && mv != killers[1] && mv != tt_move;
+          if (use_lmr) {
+            // Reduced-depth search with a null window.
+            score = -negamax(new_d - 1, -alpha - 1, -alpha, other, side, true);
+            // Re-search at full depth if score is interesting.
+            if (score > alpha)
+              score = -negamax(new_d, -beta, -alpha, other, side, true);
+          } else {
+            score = -negamax(new_d, -beta, -alpha, other, side, true);
+          }
+        }
+
+        board_.undoMoveSimulation(rec, side, other);
+        ++moves_searched;
+
+        if (score > bestValue) {
+          bestValue     = score;
+          bestMoveLocal = mv;
+          if (bestValue > alpha) {
+            alpha = bestValue;
+            if (!is_cap) {
+              // Update 2-level killer table.
+              int ki = killerIdx(actual_d);
+              if (mv != killer_moves[ki][0]) {
+                killer_moves[ki][1] = killer_moves[ki][0];
+                killer_moves[ki][0] = mv;
+              }
+              // Update history heuristic.
+              history_table[mv] += actual_d * actual_d;
+            }
+          }
+        }
+        if (alpha >= beta) break;  // beta cutoff
+      }
+
+      TTEntry entry;
+      entry.hash     = hash_key;
+      entry.value    = bestValue;
+      entry.depth    = actual_d;
+      entry.bestMove = bestMoveLocal;
+      if      (bestValue <= original_alpha) entry.flag = TTFlag::UPPERBOUND;
+      else if (bestValue >= beta)           entry.flag = TTFlag::LOWERBOUND;
+      else                                  entry.flag = TTFlag::EXACT;
+      tt[hash_key] = std::move(entry);
+
+      return bestValue;
+    };
+
+
+    std::vector<std::string> root_candidates = generateCandidates(active);
+
+    // Defensive: check if we have any candidates
+    if (root_candidates.empty()) {
+      std::cerr << "[Search] ERROR: No root candidates available!\n";
+      return "pass";
     }
 
-    TTEntry entry;
-    entry.hash     = hash_key;
-    entry.value    = bestValue;
-    entry.depth    = actual_d;
-    entry.bestMove = bestMoveLocal;
-    if      (bestValue <= original_alpha) entry.flag = TTFlag::UPPERBOUND;
-    else if (bestValue >= beta)           entry.flag = TTFlag::LOWERBOUND;
-    else                                  entry.flag = TTFlag::EXACT;
-    tt[hash_key] = std::move(entry);
+    // Check opening book before any search.
+    std::string book_move = getOpeningBookMove(active, turn_count, root_candidates);
+    if (!book_move.empty()) return book_move;
 
-    return bestValue;
-  };
+    // Initial sort by evaluateMove heuristic.
+    std::sort(root_candidates.begin(), root_candidates.end(), [&](const std::string& a, const std::string& b) {
+      return game_.evaluateMove(a, active.getId()) > game_.evaluateMove(b, active.getId());
+    });
 
+    std::string best_move  = root_candidates.front();
+    int         best_score = std::numeric_limits<int>::min();
 
-  std::vector<std::string> root_candidates = generateCandidates(active);
+    // Track time consumed per depth for branching-factor estimation.
+    std::vector<int64_t> depth_times;
+    // Bound on alpha/beta used in place of ±∞ to avoid signed-overflow.
+    constexpr int SEARCH_INFINITY = std::numeric_limits<int>::max() / 4;
 
-  // Check opening book before any search.
-  std::string book_move = getOpeningBookMove(active, turn_count, root_candidates);
-  if (!book_move.empty()) return book_move;
+    constexpr int64_t BRANCHING_FACTOR_ESTIMATE = 4;
 
-  // Initial sort by evaluateMove heuristic.
-  std::sort(root_candidates.begin(), root_candidates.end(), [&](const std::string& a, const std::string& b) {
-    return game_.evaluateMove(a, active.getId()) > game_.evaluateMove(b, active.getId());
-  });
+    // Lambda: search all root moves with the given alpha/beta window.
+    // Updates best_score_out and best_move_out.
+    auto searchRoot = [&](int depth, int alpha, int beta,
+                           int& best_score_out, std::string& best_move_out) {
+      // Re-order using the TT best move from the previous iteration.
+      uint64_t rootKey = computeZobristKey(board_, active, opponent, turn_count);
+      auto rt = tt.find(rootKey);
+      std::string rtbest = (rt != tt.end() && rt->second.hash == rootKey) ? rt->second.bestMove : "";
+      if (!rtbest.empty()) {
+        auto pos = std::find(root_candidates.begin(), root_candidates.end(), rtbest);
+        if (pos != root_candidates.end()) std::iter_swap(root_candidates.begin(), pos);
+      }
 
-  std::string best_move  = root_candidates.front();
-  int         best_score = std::numeric_limits<int>::min();
+      for (const auto& mv : root_candidates) {
+        if (clock::now() > end_time) break;
 
-  // Track time consumed per depth for branching-factor estimation.
-  std::vector<int64_t> depth_times;
-  // Bound on alpha/beta used in place of ±∞ to avoid signed-overflow.
-  constexpr int SEARCH_INFINITY = std::numeric_limits<int>::max() / 4;
+        if (mv == "pass") {
+          int val = -negamax(depth - 1, -SEARCH_INFINITY, SEARCH_INFINITY, opponent, active, false) - 10;
+          if (val > best_score_out) { best_score_out = val; best_move_out = mv; }
+          continue;
+        }
 
-  constexpr int64_t BRANCHING_FACTOR_ESTIMATE = 4;
+        Board::UndoRecord rec = board_.makeMoveSimulation(mv, active, opponent, turn_count, frightened_king_cannot_capture);
+        if (!rec.valid) continue;
 
-  // Lambda: search all root moves with the given alpha/beta window.
-  // Updates best_score_out and best_move_out.
-  auto searchRoot = [&](int depth, int alpha, int beta,
-                         int& best_score_out, std::string& best_move_out) {
-    // Re-order using the TT best move from the previous iteration.
-    uint64_t rootKey = computeZobristKey(board_, active, opponent, turn_count);
-    auto rt = tt.find(rootKey);
-    std::string rtbest = (rt != tt.end() && rt->second.hash == rootKey) ? rt->second.bestMove : "";
-    if (!rtbest.empty()) {
-      auto pos = std::find(root_candidates.begin(), root_candidates.end(), rtbest);
-      if (pos != root_candidates.end()) std::iter_swap(root_candidates.begin(), pos);
-    }
+        King* oppKing = board_.getKing(opponent.getId());
+        bool  pgld_win = (mv.find("PGLD") != std::string::npos) && checkGoldenPawnWin(active);
+        int   val;
+        if (!oppKing || pgld_win) {
+          val = 100000;
+        } else {
+          val = -negamax(depth - 1, -beta, -alpha, opponent, active, true);
+        }
+        board_.undoMoveSimulation(rec, active, opponent);
 
-    for (const auto& mv : root_candidates) {
+        if (val > best_score_out) {
+          best_score_out = val;
+          best_move_out  = mv;
+        }
+        if (val > alpha) alpha = val;  // tighten lower bound for subsequent moves
+      }
+    };
+
+    for (int depth = 1; depth <= maxDepth_; ++depth) {
       if (clock::now() > end_time) break;
 
-      if (mv == "pass") {
-        int val = -negamax(depth - 1, -SEARCH_INFINITY, SEARCH_INFINITY, opponent, active, false) - 10;
-        if (val > best_score_out) { best_score_out = val; best_move_out = mv; }
-        continue;
+      // Better time management: estimate next-depth time using branching factor ~4.
+      if (depth > 2 && !depth_times.empty()) {
+        int64_t elapsed   = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              clock::now() - start_time).count();
+        int64_t remaining = static_cast<int64_t>(timeLimitMs_) - elapsed;
+        int64_t predicted = depth_times.back() * BRANCHING_FACTOR_ESTIMATE;
+        if (predicted > remaining) break;
       }
 
-      Board::UndoRecord rec = board_.makeMoveSimulation(mv, active, opponent, turn_count, frightened_king_cannot_capture);
-      if (!rec.valid) continue;
+      auto   depth_start    = clock::now();
+      int    best_score_this = std::numeric_limits<int>::min();
+      std::string best_move_this = best_move;
 
-      King* oppKing = board_.getKing(opponent.getId());
-      bool  pgld_win = (mv.find("PGLD") != std::string::npos) && checkGoldenPawnWin(active);
-      int   val;
-      if (!oppKing || pgld_win) {
-        val = 100000;
-      } else {
-        val = -negamax(depth - 1, -beta, -alpha, opponent, active, true);
+      // --- Aspiration windows ---
+      bool   valid_prev = (best_score > std::numeric_limits<int>::min() / 2);
+      int    asp_lo     = valid_prev ? (best_score - 50) : -SEARCH_INFINITY;
+      int    asp_hi     = valid_prev ? (best_score + 50) :  SEARCH_INFINITY;
+
+      searchRoot(depth, asp_lo, asp_hi, best_score_this, best_move_this);
+
+      // If the result fell outside the window, re-search with a full window.
+      if (clock::now() <= end_time &&
+          (best_score_this <= asp_lo || best_score_this >= asp_hi) && valid_prev) {
+        best_score_this = std::numeric_limits<int>::min();
+        best_move_this  = best_move;
+        searchRoot(depth, -SEARCH_INFINITY, SEARCH_INFINITY, best_score_this, best_move_this);
       }
-      board_.undoMoveSimulation(rec, active, opponent);
 
-      if (val > best_score_out) {
-        best_score_out = val;
-        best_move_out  = mv;
-      }
-      if (val > alpha) alpha = val;  // tighten lower bound for subsequent moves
-    }
-  };
+      if (clock::now() > end_time) break;
 
-  for (int depth = 1; depth <= maxDepth_; ++depth) {
-    if (clock::now() > end_time) break;
+      best_move  = best_move_this;
+      best_score = best_score_this;
 
-    // Better time management: estimate next-depth time using branching factor ~4.
-    if (depth > 2 && !depth_times.empty()) {
-      int64_t elapsed   = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            clock::now() - start_time).count();
-      int64_t remaining = static_cast<int64_t>(timeLimitMs_) - elapsed;
-      int64_t predicted = depth_times.back() * BRANCHING_FACTOR_ESTIMATE;
-      if (predicted > remaining) break;
+      int64_t depth_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           clock::now() - depth_start).count();
+      depth_times.push_back(std::max(int64_t{1}, depth_ms));
+
+      if (best_score >= 90000) break;  // forced win found — no need to search deeper
     }
 
-    auto   depth_start    = clock::now();
-    int    best_score_this = std::numeric_limits<int>::min();
-    std::string best_move_this = best_move;
-
-    // --- Aspiration windows ---
-    bool   valid_prev = (best_score > std::numeric_limits<int>::min() / 2);
-    int    asp_lo     = valid_prev ? (best_score - 50) : -SEARCH_INFINITY;
-    int    asp_hi     = valid_prev ? (best_score + 50) :  SEARCH_INFINITY;
-
-    searchRoot(depth, asp_lo, asp_hi, best_score_this, best_move_this);
-
-    // If the result fell outside the window, re-search with a full window.
-    if (clock::now() <= end_time &&
-        (best_score_this <= asp_lo || best_score_this >= asp_hi) && valid_prev) {
-      best_score_this = std::numeric_limits<int>::min();
-      best_move_this  = best_move;
-      searchRoot(depth, -SEARCH_INFINITY, SEARCH_INFINITY, best_score_this, best_move_this);
+    // Final defensive check before returning
+    if (best_move.empty()) {
+      std::cerr << "[Search] ERROR: best_move is empty, returning first candidate\n";
+      best_move = root_candidates.front();
     }
 
-    if (clock::now() > end_time) break;
+    return best_move;
 
-    best_move  = best_move_this;
-    best_score = best_score_this;
-
-    int64_t depth_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         clock::now() - depth_start).count();
-    depth_times.push_back(std::max(int64_t{1}, depth_ms));
-
-    if (best_score >= 90000) break;  // forced win found — no need to search deeper
+  } catch (const std::exception& ex) {
+    std::cerr << "[Search] EXCEPTION caught: " << ex.what() << "\n";
+    // Return a safe fallback
+    std::vector<std::string> fallback = game_.generateAllLegalMoves(active, turn_count, frightened_king_cannot_capture, nullptr);
+    if (!fallback.empty() && fallback[0] != "pass") {
+      return fallback[0];
+    }
+    return "pass";
+  } catch (...) {
+    std::cerr << "[Search] UNKNOWN EXCEPTION caught\n";
+    return "pass";
   }
-
-  return best_move;
 }
