@@ -1,12 +1,10 @@
 //----------------------------------------------------------------------------------------------------------------------
-/// Implementation of SearchEngine: iterative deepening, negamax alpha-beta, quiescence, Zobrist-based TT,
-/// 2-level killer moves, history heuristic, MVV/LVA move ordering, LMR, check extension, null move pruning,
-/// aspiration windows, PST, pawn structure evaluation, king safety, endgame enhancements, opening book,
-/// and improved time management.
+/// Implementation of SearchEngine (iterative deepening, negamax alpha-beta, quiescence, simple TT).
 ///
-/// Note on parallel search (SMP): Board is non-copyable by design, which prevents independent per-thread
-/// board states. SMP would require Board to expose a deep-copy/clone interface; the infrastructure for it
-/// is documented here but not activated.
+/// - Uses Game::generateAllLegalMoves / generateAllLegalSpecials to build move lists.
+/// - Applies moves using Board::makeMoveSimulation and reverts using Board::undoMoveSimulation.
+/// - Uses a simple string-key transposition table (not Zobrist) for portability.
+/// - Time-limited single-threaded search (default 2000ms).
 ///
 /// Author(s): 12514109, 12312471, 12505788
 //----------------------------------------------------------------------------------------------------------------------
@@ -30,9 +28,7 @@
 
 namespace {
 
-  // ---------------------------------------------------------------------------
   // Transposition table
-  // ---------------------------------------------------------------------------
   enum class TTFlag { EXACT, LOWERBOUND, UPPERBOUND };
   struct TTEntry {
     uint64_t hash = 0;          // stored hash for collision verification
@@ -42,11 +38,9 @@ namespace {
     std::string bestMove;
   };
 
-  // ---------------------------------------------------------------------------
   // Piece-Square Tables (PST) — White's perspective.
   // Indexing: [rank][file], rank 0 = White's back rank (rank 1), rank 7 = promotion rank.
   // For Black pieces apply pst[7 - rank][file].
-  // ---------------------------------------------------------------------------
 
   // Pawns: reward central and advanced positions.
   static const int PST_PAWN[8][8] = {
@@ -132,7 +126,6 @@ namespace {
     {-50,-30,-30,-30,-30,-30,-30,-50 }
   };
 
-  // Look up PST bonus for a piece at (rank, file).
   int getPSTBonus(PieceType type, PlayerId owner, int rank, int file, bool endgame) {
     int r = (owner == PlayerId::WHITE) ? rank : (7 - rank);
     switch (type) {
@@ -146,11 +139,7 @@ namespace {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Zobrist-style hashing via FNV-1a (no pre-computed table needed).
-  // Produces a uint64_t key covering pieces, square types/items, side to move,
-  // turn count, and mana — same information as the old string key, much faster.
-  // ---------------------------------------------------------------------------
+
   uint64_t computeZobristKey(Board& board, Player& active, Player& opponent, int turn_count) {
     constexpr uint64_t FNV1A_OFFSET_BASIS = 14695981039346656037ULL;
     constexpr uint64_t PRIME              = 1099511628211ULL;
@@ -190,9 +179,9 @@ namespace {
     return h;
   }
 
-  // ---------------------------------------------------------------------------
+ 
   // Move capture detection
-  // ---------------------------------------------------------------------------
+
   bool moveIsCapture(const std::string& mv, Board& board, Player& active) {
     if (mv.find('x') != std::string::npos) return true;
     std::vector<std::string> tokens;
@@ -213,10 +202,9 @@ namespace {
     return false;
   }
 
-  // ---------------------------------------------------------------------------
   // MVV/LVA (Most Valuable Victim / Least Valuable Attacker) scoring for captures.
   // Returns victim_value * 10 - attacker_value (higher = search first).
-  // ---------------------------------------------------------------------------
+
   int simplePieceWeight(PieceType t) {
     switch (t) {
       case PieceType::PAWN:   return 1;
@@ -257,20 +245,7 @@ namespace {
     return simplePieceWeight(victim->getType()) * 10 - simplePieceWeight(attacker->getType());
   }
 
-  // ---------------------------------------------------------------------------
-  // Opening book — returns a principle-based first move for turns 1–8,
-  // or an empty string when outside that range.
-  //
-  // Parameters:
-  //   active     – the player whose turn it is (WHITE or BLACK)
-  //   turn_count – the current game turn (1-indexed)
-  //   candidates – the full list of legal moves generated for this position
-  //
-  // Returns the first book entry found in `candidates`, or "" if no book move
-  // is legal in the current position.  Verification against the legal-move
-  // list is mandatory: special-piece configurations may make standard
-  // square-notation moves illegal even on a typical starting board.
-  // ---------------------------------------------------------------------------
+
   std::string getOpeningBookMove(Player& active, int turn_count,
                                   const std::vector<std::string>& candidates) {
     if (turn_count > 8) return "";
@@ -312,10 +287,7 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
   auto start_time = clock::now();
   auto end_time   = start_time + std::chrono::milliseconds(timeLimitMs_);
 
-  // ---------------------------------------------------------------------------
-  // Per-search state
-  // ---------------------------------------------------------------------------
-  // Transposition table keyed by 64-bit Zobrist hash.
+
   std::unordered_map<uint64_t, TTEntry> tt;
   tt.reserve(1u << 17);
 
@@ -325,14 +297,12 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
   // History heuristic: maps quiet move string → accumulated bonus.
   std::unordered_map<std::string, int> history_table;
 
-  // Helper: clamp a depth value to a valid killer table index.
+  
   auto killerIdx = [&](int d) -> int {
     return std::min(d, (int)killer_moves.size() - 1);
   };
 
-  // ---------------------------------------------------------------------------
   // Helper: golden-pawn win check
-  // ---------------------------------------------------------------------------
   auto checkGoldenPawnWin = [&](Player& currentPlayer) -> bool {
     int back_rank = (currentPlayer.getId() == PlayerId::WHITE) ? 7 : 0;
     for (int c = 0; c < 8; ++c) {
@@ -345,9 +315,8 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     return false;
   };
 
-  // ---------------------------------------------------------------------------
   // Helper: generate root candidate list (filtering previously failed commands).
-  // ---------------------------------------------------------------------------
+
   auto generateCandidates = [&](Player& p) {
     std::vector<std::string> m = game_.generateAllLegalMoves(p, turn_count, frightened_king_cannot_capture, nullptr);
     std::vector<std::string> s = game_.generateAllLegalSpecials(p, turn_count, frightened_king_cannot_capture, nullptr);
@@ -359,9 +328,9 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     return cand;
   };
 
-  // ---------------------------------------------------------------------------
+
   // Static evaluation with PST, pawn structure, king safety, endgame bonuses.
-  // ---------------------------------------------------------------------------
+
   auto evaluateStatic = [&](Player& a, Player& b) -> int {
     int score = 0;
 
@@ -494,9 +463,8 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     return score;
   };
 
-  // ---------------------------------------------------------------------------
   // Quiescence search: extend captures to reduce horizon effect.
-  // ---------------------------------------------------------------------------
+
   std::function<int(int,int,Player&,Player&)> quiescence;
   quiescence = [&](int alpha, int beta, Player& side, Player& other) -> int {
     if (clock::now() > end_time) return 0;
@@ -532,16 +500,8 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     return alpha;
   };
 
-  // ---------------------------------------------------------------------------
-  // Negamax with:
-  //  • Zobrist TT with collision verification
-  //  • Check extension (+1 ply when side to move is in check)
-  //  • Null move pruning (depth >= 3, not in check, R = 2)
-  //  • 2-level killer moves + history heuristic + MVV/LVA move ordering
-  //  • Late Move Reduction (depth >= 3, quiet non-killer moves, move_count >= 3)
-  //  • Fixed TT flag convention (saves original_alpha)
-  // ---------------------------------------------------------------------------
-  std::function<int(int,int,int,Player&,Player&,bool)> negamax;
+
+ 
   negamax = [&](int depth, int alpha, int beta,
                 Player& side, Player& other, bool allow_null) -> int
   {
@@ -556,7 +516,7 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     if (actual_d == 0)
       return quiescence(alpha, beta, side, other);
 
-    // --- TT probe ---
+
     int      original_alpha = alpha;
     uint64_t hash_key       = computeZobristKey(board_, side, other, turn_count);
     auto it = tt.find(hash_key);
@@ -672,7 +632,6 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
       if (alpha >= beta) break;  // beta cutoff
     }
 
-    // --- TT store (fixed flag logic using original_alpha) ---
     TTEntry entry;
     entry.hash     = hash_key;
     entry.value    = bestValue;
@@ -686,9 +645,7 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     return bestValue;
   };
 
-  // ---------------------------------------------------------------------------
-  // Iterative deepening with aspiration windows and improved time management.
-  // ---------------------------------------------------------------------------
+
   std::vector<std::string> root_candidates = generateCandidates(active);
 
   // Check opening book before any search.
@@ -707,9 +664,7 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
   std::vector<int64_t> depth_times;
   // Bound on alpha/beta used in place of ±∞ to avoid signed-overflow.
   constexpr int SEARCH_INFINITY = std::numeric_limits<int>::max() / 4;
-  // Conservative estimate of the per-ply branching factor used in the time
-  // prediction heuristic.  Real alpha-beta typically achieves ~sqrt(b) after
-  // ordering, but 4 is used here to avoid starting a depth that cannot finish.
+
   constexpr int64_t BRANCHING_FACTOR_ESTIMATE = 4;
 
   // Lambda: search all root moves with the given alpha/beta window.
