@@ -317,14 +317,28 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     };
 
     // Helper: generate root candidate list (filtering previously failed commands).
-
+    // Strip "move " prefix from legal moves so they work with makeMoveSimulation.
     auto generateCandidates = [&](Player& p) {
       std::vector<std::string> m = game_.generateAllLegalMoves(p, turn_count, frightened_king_cannot_capture, nullptr);
       std::vector<std::string> s = game_.generateAllLegalSpecials(p, turn_count, frightened_king_cannot_capture, nullptr);
       std::vector<std::string> cand;
       cand.reserve(m.size() + s.size());
-      for (auto& it : m) if (!failed_commands.count(it)) cand.push_back(it);
-      for (auto& it : s) if (!failed_commands.count(it)) cand.push_back(it);
+      
+      // Strip "move " prefix from legal moves
+      for (auto& it : m) {
+        if (!failed_commands.count(it)) {
+          if (it.substr(0, 5) == "move ") {
+            cand.push_back(it.substr(5));  // Remove "move " prefix
+          } else {
+            cand.push_back(it);
+          }
+        }
+      }
+      
+      for (auto& it : s) {
+        if (!failed_commands.count(it)) cand.push_back(it);
+      }
+      
       if (cand.empty()) cand.push_back("pass");
       return cand;
     };
