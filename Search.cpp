@@ -37,7 +37,8 @@ namespace {
     std::vector<std::string> tokens;
     Utils::tokenize(mv, tokens, ' ');
     if (tokens.empty()) return false;
-    if (tokens[0] == "move") return false;
+    
+    // Special moves can be captures
     if (tokens[0] == "special") {
       for (int i = static_cast<int>(tokens.size()) - 1; i >= 1; --i) {
         if (Coordinates::isValid(tokens[i])) {
@@ -49,6 +50,7 @@ namespace {
         }
       }
     }
+    // Regular moves are not captures (captures use 'x' notation)
     return false;
   }
 
@@ -128,7 +130,6 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
   };
 
   auto evaluateStatic = [&](Player& a, Player& b) -> int {
-    
     int score = 0;
     for (int rf = 0; rf < 8; ++rf)
     {
@@ -149,35 +150,40 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
           case PieceType::KING:   val = 20000; break;
           default: val = 100; break;
         }
-        // special bonus
+        // Special piece bonuses
         std::string pid = p->getPieceId();
-        if (pid == "PGLD") val += 300;
-        else if (pid == "PEXP") val += 150;
-        else if (pid == "RINV") val += 150;
+        if (pid == "PGLD") val += 300;  // Golden pawn is valuable
+        else if (pid == "PEXP") val += 150;  // Explosive pawn bonus
+        else if (pid == "RINV") val += 150;  // Invincible rook bonus
 
         if (p->getOwner() == a.getId())
         {
           score += val;
+          // Bonus for advanced pawns (closer to promotion)
           if (p->getType() == PieceType::PAWN) score += (a.getId() == PlayerId::WHITE) ? rf * 10 : (7 - rf) * 10;
         }
         else
         {
           score -= val;
+          // Penalty for opponent advanced pawns
           if (p->getType() == PieceType::PAWN) score -= (b.getId() == PlayerId::WHITE) ? rf * 10 : (7 - rf) * 10;
         }
       }
     }
+    // Mobility heuristic: more legal moves is better
     auto act_moves = game_.generateAllLegalMoves(a, turn_count, false, nullptr);
     auto opp_moves = game_.generateAllLegalMoves(b, turn_count, false, nullptr);
     score += static_cast<int>(act_moves.size()) * 5;
     score -= static_cast<int>(opp_moves.size()) * 5;
+    
+    // Mana advantage
     score += a.getMana() * 3;
     score -= b.getMana() * 3;
     
     return score;
   };
 
-  // Quiescence (captures + special-captures)
+  // Quiescence search (captures + special-captures) to reduce horizon effect
   std::function<int(int,int,Player&,Player&)> quiescence;
   quiescence = [&](int alpha, int beta, Player& side, Player& other) -> int {
     if (clock::now() > end_time) return 0; // time cut
@@ -214,7 +220,7 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     return alpha;
   };
 
-  // Negamax with alpha-beta and TT
+  // Negamax with alpha-beta pruning and transposition table
   std::function<int(int,int,int,Player&,Player&)> negamax;
   negamax = [&](int depth, int alpha, int beta, Player& side, Player& other) -> int 
   {
@@ -245,7 +251,7 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
 
     std::string killer = killer_moves[depth];
 
-    // killer moves first
+    // Sort with killer moves first for better pruning
     std::sort(cand.begin(), cand.end(), [&](const std::string& a, const std::string& b)
     {
       if (a == killer) return true;
@@ -272,7 +278,7 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
       Board::UndoRecord rec = board_.makeMoveSimulation(mv, side, other, turn_count, frightened_king_cannot_capture);
       if (!rec.valid) continue;
 
-      // recursive call
+      // Recursive alpha-beta search
       King* oppKing = board_.getKing(other.getId());
       bool pgld_win = false;
       if (mv.find("PGLD") != std::string::npos) pgld_win = checkGoldenPawnWin(side);
@@ -284,15 +290,15 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
       {
         bestValue = score;
         bestMoveLocal = mv;
-        // alpha-beta update
+        // Alpha-beta cutoff update
         if (bestValue > alpha)
         {
           alpha = bestValue;
-          // safe killer move
+          // Store non-capture moves as killers (quiet moves more likely to be useful)
           if (!moveIsCapture(mv, board_, side)) killer_moves[depth] = mv;
         }
       }
-      if (alpha >= beta) break;
+      if (alpha >= beta) break;  // Beta cutoff
     }
 
     TTEntry entry;
@@ -307,9 +313,9 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     return bestValue;
   };
 
-  // iterative deepening on root
+  // Iterative deepening with root move ordering
   std::vector<std::string> root_candidates = generateCandidates(active);
-  // initial sort by quick heuristic
+  // Initial sort by quick heuristic
   std::sort(root_candidates.begin(), root_candidates.end(), [&](const std::string& a, const std::string& b){
     return game_.evaluateMove(a, active.getId()) > game_.evaluateMove(b, active.getId());
   });
@@ -323,12 +329,11 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     int best_score_this = std::numeric_limits<int>::min();
     std::string best_move_this = best_move;
 
-   
+    // Reorder root moves using TT history
     std::string rootKey = boardKey(board_, active, opponent, turn_count);
     auto rt = tt.find(rootKey);
     std::string rtbest = (rt != tt.end()) ? rt->second.bestMove : "";
     if (!rtbest.empty()) {
-  
       auto it = std::find(root_candidates.begin(), root_candidates.end(), rtbest);
       if (it != root_candidates.end()) {
         std::iter_swap(root_candidates.begin(), it);
@@ -363,11 +368,11 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
 
     if (clock::now() > end_time) break;
 
-    // adopt depth result
+    // Adopt depth result
     best_move = best_move_this;
     best_score = best_score_this;
 
-    if (best_score >= 90000) break; // mate found
+    if (best_score >= 90000) break;  // Mate found, no need to search deeper
   }
 
   return best_move;
