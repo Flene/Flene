@@ -180,7 +180,7 @@ namespace {
     return h;
   }
 
- 
+  
   // Move capture detection
 
   bool moveIsCapture(const std::string& mv, Board& board, Player& active) {
@@ -317,14 +317,21 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     };
 
     // Helper: generate root candidate list (filtering previously failed commands).
-
+    // ---------------------------------------------------------------------------
     auto generateCandidates = [&](Player& p) {
       std::vector<std::string> m = game_.generateAllLegalMoves(p, turn_count, frightened_king_cannot_capture, nullptr);
       std::vector<std::string> s = game_.generateAllLegalSpecials(p, turn_count, frightened_king_cannot_capture, nullptr);
       std::vector<std::string> cand;
       cand.reserve(m.size() + s.size());
-      for (auto& it : m) if (!failed_commands.count(it)) cand.push_back(it);
-      for (auto& it : s) if (!failed_commands.count(it)) cand.push_back(it);
+      for (auto& it : m) {
+        // Extract just the move notation from "move X" format for failed_commands filtering
+        std::string notation = it;
+        if (it.find("move ") == 0) notation = it.substr(5);
+        if (!failed_commands.count(notation)) cand.push_back(it);
+      }
+      for (auto& it : s) {
+        if (!failed_commands.count(it)) cand.push_back(it);
+      }
       if (cand.empty()) cand.push_back("pass");
       return cand;
     };
@@ -505,7 +512,7 @@ std::string SearchEngine::findBestMove(Player& active, Player& opponent, int tur
     };
 
 
-   
+    
     negamax = [&](int depth, int alpha, int beta,
                   Player& side, Player& other, bool allow_null) -> int
     {
