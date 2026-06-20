@@ -1,0 +1,389 @@
+[project_definition]
+binary_path = "./a2"
+makefile_path = "."
+make_targets = ["all"]
+project_name = "a2"
+global_timeout = 120
+
+[[testcases]]
+name = "Invalid Args"
+description = "Where is my file?"
+type = "OrdIO"
+io_file = "tests/01/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 2
+argv = []
+
+[[testcases]]
+name = "Nevermind"
+description = "Instantly call quit"
+type = "OrdIO"
+io_file = "tests/02/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/02/configs/game_config.txt", "tests/02/configs/message_config.txt"]
+
+[[testcases]]
+name = "A Normal Chess Board?"
+description = "Successfully load a chess board"
+type = "OrdIO"
+io_file = "tests/03/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/03/configs/game_config.txt", "tests/03/configs/message_config.txt"]
+
+[[testcases]]
+name = "Lets see some information!"
+description = "Handle basic commands like help and info"
+type = "OrdIO"
+io_file = "tests/04/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/04/configs/game_config.txt", "tests/04/configs/message_config.txt"]
+
+[[testcases]]
+name = "I can move?"
+description = "Handle simple piece movement"
+type = "OrdIO"
+io_file = "tests/05/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/05/configs/game_config.txt", "tests/05/configs/message_config.txt"]
+
+[[testcases]]
+name = "en garde!"
+description = "Handle simple capturing"
+type = "OrdIO"
+io_file = "tests/06/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/06/configs/game_config.txt", "tests/06/configs/message_config.txt"]
+
+[[testcases]]
+name = "Who is that?!"
+description = "A special piece has appeared"
+type = "OrdIO"
+io_file = "tests/07/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/07/configs/game_config.txt", "tests/07/configs/message_config.txt"]
+
+[[testcases]]
+name = "What are these squares?"
+description = "Successfully load special squares"
+type = "OrdIO"
+io_file = "tests/08/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/08/configs/game_config.txt", "tests/08/configs/message_config.txt"]
+
+[[testcases]]
+name = "How did this happen?"
+description = "Stalemate"
+type = "OrdIO"
+io_file = "tests/09/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/09/configs/game_config.txt", "tests/09/configs/message_config.txt"]
+
+[[testcases]]
+name = "Lets just agree to disagree"
+description = "Full Game"
+type = "OrdIO"
+io_file = "tests/10/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+add_exp_file = "tests/10/out_ref.txt"
+add_out_file = "tests/10/out.txt"
+argv = ["tests/10/configs/game_config.txt", "tests/10/configs/message_config.txt"]
+
+[[testcases]]
+name = "Alchemist Battle!"
+description = "Some Spells!"
+type = "OrdIO"
+io_file = "tests/11/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/11/configs/game_config.txt", "tests/11/configs/message_config.txt"]
+
+[[testcases]]
+name = "The Armory"
+description = "The Armory"
+type = "OrdIO"
+io_file = "tests/12/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/12/configs/game_config.txt", "tests/12/configs/message_config.txt"]
+
+[[testcases]]
+name = "Impatient Pawn"
+description = "When are these Tests finished? I can't wait!"
+type = "OrdIO"
+io_file = "tests/13/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/13/configs/game_config.txt", "tests/13/configs/message_config.txt"]
+
+[[testcases]]
+name = "Stubborn Pawn"
+description = "Stubborn Pawn"
+type = "OrdIO"
+io_file = "tests/14/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/14/configs/game_config.txt", "tests/14/configs/message_config.txt"]
+
+[[testcases]]
+name = "Nervous Pawn"
+description = "Nervous Pawn"
+type = "OrdIO"
+io_file = "tests/15/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/15/configs/game_config.txt", "tests/15/configs/message_config.txt"]
+
+[[testcases]]
+name = "Explosive Pawn"
+description = "Explosive Pawn"
+type = "OrdIO"
+io_file = "tests/16/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/16/configs/game_config.txt", "tests/16/configs/message_config.txt"]
+
+[[testcases]]
+name = "Invincible Rook"
+description = "Invincible Rook"
+type = "OrdIO"
+io_file = "tests/17/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/17/configs/game_config.txt", "tests/17/configs/message_config.txt"]
+
+[[testcases]]
+name = "Painter Rook"
+description = "Painter Rook"
+type = "OrdIO"
+io_file = "tests/18/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/18/configs/game_config.txt", "tests/18/configs/message_config.txt"]
+
+[[testcases]]
+name = "Jumpy Knight"
+description = "Jumpy Knight"
+type = "OrdIO"
+io_file = "tests/19/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/19/configs/game_config.txt", "tests/19/configs/message_config.txt"]
+
+[[testcases]]
+name = "Ice Knight"
+description = "Ice Knight"
+type = "OrdIO"
+io_file = "tests/20/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/20/configs/game_config.txt", "tests/20/configs/message_config.txt"]
+
+[[testcases]]
+name = "Color Blind Bishop"
+description = "Color Blind Bishop"
+type = "OrdIO"
+io_file = "tests/21/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/21/configs/game_config.txt", "tests/21/configs/message_config.txt"]
+
+[[testcases]]
+name = "Preacher Bishop"
+description = "Preacher Bishop"
+type = "OrdIO"
+io_file = "tests/22/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/22/configs/game_config.txt", "tests/22/configs/message_config.txt"]
+
+[[testcases]]
+name = "Flipper Queen"
+description = "Flipper Queen"
+type = "OrdIO"
+io_file = "tests/23/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/23/configs/game_config.txt", "tests/23/configs/message_config.txt"]
+
+[[testcases]]
+name = "Jumpy Queen"
+description = "Jumpy Queen"
+type = "OrdIO"
+io_file = "tests/24/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/24/configs/game_config.txt", "tests/24/configs/message_config.txt"]
+
+[[testcases]]
+name = "Hungry Queen"
+description = "Hungry Queen"
+type = "OrdIO"
+io_file = "tests/25/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/25/configs/game_config.txt", "tests/25/configs/message_config.txt"]
+
+[[testcases]]
+name = "Frightened King"
+description = "Frightened King"
+type = "OrdIO"
+io_file = "tests/26/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/26/configs/game_config.txt", "tests/26/configs/message_config.txt"]
+
+[[testcases]]
+name = "Archer King"
+description = "Archer King"
+type = "OrdIO"
+io_file = "tests/27/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/27/configs/game_config.txt", "tests/27/configs/message_config.txt"]
+
+[[testcases]]
+name = "Special Moves"
+description = "Special Moves"
+type = "OrdIO"
+io_file = "tests/28/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/28/configs/game_config.txt", "tests/28/configs/message_config.txt"]
+
+[[testcases]]
+name = "Golden Pawn"
+description = "Golden Pawn"
+type = "OrdIO"
+io_file = "tests/29/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/29/configs/game_config.txt", "tests/29/configs/message_config.txt"]
+
+[[testcases]]
+name = "[MINIMUM REQUIREMENT] Fancy Fool's Mate"
+description = "That Bishop was worth it!"
+type = "OrdIO"
+io_file = "tests/30/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/30/configs/game_config.txt", "tests/30/configs/message_config.txt"]
+add_exp_file = "tests/30/what_happened_ref.txt"
+add_out_file = "tests/30/what_happened.txt"
+
+# Additional Testcases:
+[[testcases]]
+name = "board"
+description = "board"
+type = "OrdIO"
+io_file = "tests/34/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/34/configs/game_config.txt", "tests/34/configs/message_config.txt"]
+
+[[testcases]]
+name = "info"
+description = "info"
+type = "OrdIO"
+io_file = "tests/35/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/35/configs/game_config.txt", "tests/35/configs/message_config.txt"]
+
+[[testcases]]
+name = "draw"
+description = "draw"
+type = "OrdIO"
+io_file = "tests/37/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/37/configs/game_config.txt", "tests/37/configs/message_config.txt"]
+
+[[testcases]]
+name = "history"
+description = "history"
+type = "OrdIO"
+io_file = "tests/38/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/38/configs/game_config.txt", "tests/38/configs/message_config.txt"]
+
+[[testcases]]
+name = "Private Stubborn Pawn"
+description = "Stubborn Pawn"
+type = "OrdIO"
+io_file = "tests/48/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/48/configs/game_config.txt", "tests/48/configs/message_config.txt"]
+
+[[testcases]]
+name = "Private Nervous Pawn"
+description = "Private Nervous Pawn"
+type = "OrdIO"
+io_file = "tests/49/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/49/configs/game_config.txt", "tests/49/configs/message_config.txt"]
+
+[[testcases]]
+name = "Private Explosive Pawn"
+description = "Private Explosive Pawn"
+type = "OrdIO"
+io_file = "tests/50/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/50/configs/game_config.txt", "tests/50/configs/message_config.txt"]
+
+[[testcases]]
+name = "Private Painter Rook"
+description = "Private Painter Rook"
+type = "OrdIO"
+io_file = "tests/52/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/52/configs/game_config.txt", "tests/52/configs/message_config.txt"]
+
+[[testcases]]
+name = "Private Ice Knight"
+description = "Private Ice Knight"
+type = "OrdIO"
+io_file = "tests/54/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/54/configs/game_config.txt", "tests/54/configs/message_config.txt"]
+
+[[testcases]]
+name = "Private Preacher Bishop"
+description = "Private Preacher Bishop"
+type = "OrdIO"
+io_file = "tests/56/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/56/configs/game_config.txt", "tests/56/configs/message_config.txt"]
+
+[[testcases]]
+name = "Private Flipper Queen"
+description = "Private Flipper Queen"
+type = "OrdIO"
+io_file = "tests/57/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/57/configs/game_config.txt", "tests/57/configs/message_config.txt"]
+
+[[testcases]]
+name = "Private Special Moves"
+description = "Private Special Moves"
+type = "OrdIO"
+io_file = "tests/62/io.txt"
+io_prompt = "^(White\\s>\\s*|Black\\s>\\s*|\\s*>\\s*)$"
+exp_exit_code = 0
+argv = ["tests/62/configs/game_config.txt", "tests/62/configs/message_config.txt"]
